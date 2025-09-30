@@ -12,6 +12,108 @@ def clean_column_values(df, column_name):
     return df
 
 
+def apply_duration_based_reach_adjustment(spot_data_df: pd.DataFrame, reach_computed: float) -> float:
+    """
+    Rule No. 2: Duration-based reach adjustment (CORRECTED VERSION)
+    
+    IMPORTANT: Only applies if final LTV reach >= 15%
+    Prevents reducing low reach values to 0
+    
+    Algorithm:
+    1. Calculate duration distribution percentages
+    2. Compute weighted average: duration × percentage
+    3. Sum weighted averages
+    4. If sum < 15, consider as 15
+    5. Calculate factor: (25 - sum_of_weighted_average) × 1.5
+    6. Adjust reach: final_ltv_reach = ltv_reach_computed - factor
+    
+    Args:
+        spot_data_df (pd.DataFrame): Spot data containing duration information
+        reach_computed (float): Computed reach value
+        
+    Returns:
+        float: Duration-adjusted reach value
+    """
+    try:
+        # Check threshold condition - only apply if reach >= 15%
+        if reach_computed < 15:
+            print(f"✅ Rule No. 2: Skipped (reach {reach_computed:.2f}% < 15% threshold)")
+            return reach_computed
+        
+        # Check if duration data is available (check both uppercase and lowercase)
+        duration_column = None
+        if 'ad duration' in spot_data_df.columns:
+            duration_column = 'ad duration'
+        elif 'AD DURATION' in spot_data_df.columns:
+            duration_column = 'AD DURATION'
+        
+        if duration_column is None:
+            print("⚠️ Rule No. 2: Duration column not found, using original reach")
+            return reach_computed
+        
+        # Clean and process duration data
+        duration_data = spot_data_df[duration_column].dropna()
+        if duration_data.empty:
+            print("⚠️ Rule No. 2: No duration data available, using original reach")
+            return reach_computed
+        
+        # Convert duration to numeric
+        try:
+            duration_numeric = pd.to_numeric(duration_data, errors='coerce').dropna()
+        except Exception as e:
+            print(f"⚠️ Rule No. 2: Error converting duration to numeric: {e}")
+            return reach_computed
+        
+        if duration_numeric.empty:
+            print("⚠️ Rule No. 2: No valid duration data after conversion, using original reach")
+            return reach_computed
+        
+        # Calculate duration distribution percentages
+        duration_counts = duration_numeric.value_counts()
+        total_spots = len(duration_numeric)
+        
+        print(f"🔍 Rule No. 2: Duration Analysis")
+        print(f"  📊 Total spots: {total_spots}")
+        
+        # Calculate weighted average (CORRECTED formula)
+        # Formula: sum(duration × percentage/100) where percentage = (count/total) × 100
+        weighted_sum = 0
+        for duration, count in duration_counts.items():
+            percentage = (count / total_spots) * 100
+            # Weighted average = duration × (percentage/100) = duration × proportion
+            weighted_average = duration * (percentage / 100)
+            weighted_sum += weighted_average
+            print(f"  📊 Duration {duration}s: {count} spots ({percentage:.1f}%) → Weighted: {weighted_average:.2f}")
+        
+        # Apply minimum threshold
+        if weighted_sum < 15:
+            weighted_sum = 15
+            print(f"  📊 Weighted sum < 15, using 15 as minimum")
+        
+        print(f"  📊 Total weighted sum: {weighted_sum:.1f}")
+        
+        # Calculate adjustment factor
+        factor = (25 - weighted_sum) * 1.5
+        print(f"  📊 Adjustment factor: (25 - {weighted_sum:.1f}) × 1.5 = {factor:.2f}")
+        
+        # Apply adjustment
+        adjusted_reach = reach_computed - factor
+        print(f"  📊 Original reach: {reach_computed:.2f}%")
+        print(f"  📊 Adjusted reach: {reach_computed:.2f}% - {factor:.2f} = {adjusted_reach:.2f}%")
+        
+        # Ensure non-negative result
+        final_reach = max(adjusted_reach, 0)
+        if final_reach != adjusted_reach:
+            print(f"  🚫 Capped at 0%: {adjusted_reach:.2f}% → {final_reach:.2f}%")
+        
+        print(f"✅ Rule No. 2: Applied successfully")
+        return final_reach
+        
+    except Exception as e:
+        print(f"❌ Rule No. 2: Error in duration-based adjustment: {e}")
+        return reach_computed
+
+
 def calculate_frequency_adjusted_ltv_reach(spot_data_df: pd.DataFrame, ltv_reach_value: float, campaign_frequency_type: str = "high") -> float:
     """
     Calculate frequency-adjusted LTV reach based on campaign characteristics
@@ -89,11 +191,11 @@ def calculate_frequency_adjusted_ltv_reach(spot_data_df: pd.DataFrame, ltv_reach
                 print(f"✅ Low frequency campaign with ≤75% 15s creatives detected")
                 print(f"  📊 No adjustment applied: {ltv_reach_value:.2f}%")
         
-        # Cap at 100%
-        final_reach = min(adjusted_reach, 100.0)
+        # Cap at 99.74% (realistic maximum achievable reach)
+        final_reach = min(adjusted_reach, 99.74)
         
         if final_reach != adjusted_reach:
-            print(f"  🚫 Capped at 100%: {adjusted_reach:.2f}% → {final_reach:.2f}%")
+            print(f"  🚫 Capped at 99.74%: {adjusted_reach:.2f}% → {final_reach:.2f}%")
         
         return final_reach
         
@@ -408,7 +510,7 @@ def compute_daily_cumulative_reach(spot_data_df: pd.DataFrame, master_channel_df
                             # Calculate how many 4% increments we should have
                             num_increments = int(rating_progress - 1)
                             target_reach = max_reach * (1.04 ** num_increments)
-                            target_reach = min(target_reach, 100)  # Cap at 100%
+                            target_reach = min(target_reach, 99.74)  # Cap at 99.74%
                         else:
                             target_reach = max_reach
                     else:
@@ -421,8 +523,8 @@ def compute_daily_cumulative_reach(spot_data_df: pd.DataFrame, master_channel_df
                         new_segment = np.linspace(start_val, target_reach, num=num_steps)
                         reach_final[stagnation_start_idx:] = new_segment
 
-            # cap at 100%
-            reach_final = np.minimum(reach_final, 100)
+            # cap at 99.74% (realistic maximum achievable reach)
+            reach_final = np.minimum(reach_final, 99.74)
             
             group['reach_final'] = reach_final
             group['campaign_type'] = 'high_frequency'
@@ -569,7 +671,7 @@ def compute_daily_cumulative_reach(spot_data_df: pd.DataFrame, master_channel_df
                             # Calculate how many 4% increments we should have
                             num_increments = int(rating_progress - 1)
                             target_reach = max_reach * (1.04 ** num_increments)
-                            target_reach = min(target_reach, 100)  # Cap at 100%
+                            target_reach = min(target_reach, 99.74)  # Cap at 99.74%
                         else:
                             target_reach = max_reach
                     else:
@@ -582,8 +684,8 @@ def compute_daily_cumulative_reach(spot_data_df: pd.DataFrame, master_channel_df
                         new_segment = np.linspace(start_val, target_reach, num=num_steps)
                         reach_final[stagnation_start_idx:] = new_segment
 
-            # cap at 100%
-            reach_final = np.minimum(reach_final, 100)
+            # cap at 99.74% (realistic maximum achievable reach)
+            reach_final = np.minimum(reach_final, 99.74)
             
             group['reach_final'] = reach_final
             group['campaign_type'] = 'low_frequency'

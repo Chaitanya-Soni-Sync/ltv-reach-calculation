@@ -79,6 +79,9 @@ def compute_ltv_reach_pipeline(products: str, start_date: str, end_date: str, re
         # Step 4: LTV Reach Analysis (Final reach from daily cumulative reach)
         print("\n--- Step 4: Computing LTV Reach ---")
         
+        # Import Rule No. 2 function
+        from daily_cum_reach import apply_duration_based_reach_adjustment
+        
         # LTV reach is the final reach from daily cumulative reach (same as reference project)
         ltv_data = []
         for region in daily_reach_computed['region'].unique():
@@ -95,19 +98,48 @@ def compute_ltv_reach_pipeline(products: str, start_date: str, end_date: str, re
                     total_rating = brand_region_data['total_rating'].iloc[-1]
                     max_reach = brand_region_data['max_reach'].iloc[-1]
                     
-                    ltv_data.append({
-                        'brand': brand,
-                        'ltv_reach': round(final_reach, 2),
-                        'region': region,
-                        'total_spots': total_spots,
-                        'total_rating': round(total_rating, 2),
-                        'max_reach': round(max_reach, 2),
-                        'campaign_type': 'low_frequency' if max_reach < 40 else 'high_frequency',
-                        'date_range': f"{start_date} to {end_date}"
-                    })
+                    # Apply Rule No. 2: Duration-based reach adjustment (if reach >= 15%)
+                    try:
+                        # Get spot data for this brand-region combination (case-insensitive)
+                        brand_region_spot_data = spot_data_df[
+                            (spot_data_df['region'].str.lower() == region.lower()) & 
+                            (spot_data_df['brand'].str.lower() == brand.lower())
+                        ]
+                        
+                        # Apply Rule No. 2
+                        adjusted_reach = apply_duration_based_reach_adjustment(brand_region_spot_data, final_reach)
+                        
+                        ltv_data.append({
+                            'brand': brand,
+                            'ltv_reach': round(adjusted_reach, 2),
+                            'original_reach': round(final_reach, 2),
+                            'region': region,
+                            'total_spots': total_spots,
+                            'total_rating': round(total_rating, 2),
+                            'max_reach': round(max_reach, 2),
+                            'campaign_type': 'low_frequency' if max_reach < 40 else 'high_frequency',
+                            'rule_2_applied': 'Yes' if final_reach >= 15 else 'No',
+                            'date_range': f"{start_date} to {end_date}"
+                        })
+                        
+                    except Exception as e:
+                        print(f"⚠️ Error applying Rule No. 2 for {brand} in {region}: {e}")
+                        # Use original reach if Rule No. 2 fails
+                        ltv_data.append({
+                            'brand': brand,
+                            'ltv_reach': round(final_reach, 2),
+                            'original_reach': round(final_reach, 2),
+                            'region': region,
+                            'total_spots': total_spots,
+                            'total_rating': round(total_rating, 2),
+                            'max_reach': round(max_reach, 2),
+                            'campaign_type': 'low_frequency' if max_reach < 40 else 'high_frequency',
+                            'rule_2_applied': 'Error',
+                            'date_range': f"{start_date} to {end_date}"
+                        })
         
         results['ltv_reach'] = pd.DataFrame(ltv_data)
-        print(f"✅ LTV reach computed: {len(ltv_data)} records")
+        print(f"✅ LTV reach computed with Rule No. 2: {len(ltv_data)} records")
         
         # Save results to CSV files
         print("\n--- Saving Results ---")
@@ -179,29 +211,65 @@ def display_ltv_results(results: dict):
         print(f"  Max LTV Reach Achieved: {daily_reach['reach_final'].max():.2f}%")
         print(f"  Average Daily LTV Reach: {daily_reach['reach_final'].mean():.2f}%")
         
-        # Final LTV reach by region and brand
-        final_ltv_summary = daily_reach.groupby(['region', 'brand']).agg({
-            'reach_final': 'last',
-            'total_cumulative_spots': 'last',
-            'total_rating': 'last',
-            'max_reach': 'last'
-        }).reset_index()
-        
-        print(f"\n🎯 FINAL LTV REACH BY REGION & BRAND")
-        print("-" * 80)
-        formatted_summary = format_dataframe_for_display(
-            final_ltv_summary.rename(columns={
-                'region': 'Region',
-                'brand': 'Brand', 
-                'reach_final': 'Final LTV Reach (%)',
-                'total_cumulative_spots': 'Total Spots',
-                'total_rating': 'Total Rating',
-                'max_reach': 'Max Reach (%)'
-            }), 
-            reset_index=True, 
-            round_decimals=2
-        )
-        print(formatted_summary.to_string())
+        # Final LTV reach by region and brand (with Rule No. 2 applied)
+        if 'ltv_reach' in results and not results['ltv_reach'].empty:
+            ltv_reach = results['ltv_reach']
+            
+            print(f"\n🎯 FINAL LTV REACH WITH RULE NO. 2 BY REGION & BRAND")
+            print("-" * 100)
+            formatted_ltv = format_dataframe_for_display(
+                ltv_reach.rename(columns={
+                    'brand': 'Brand',
+                    'region': 'Region',
+                    'ltv_reach': 'LTV Reach (%)',
+                    'original_reach': 'Original Reach (%)',
+                    'total_spots': 'Total Spots',
+                    'total_rating': 'Total Rating',
+                    'max_reach': 'Max Reach (%)',
+                    'campaign_type': 'Campaign Type',
+                    'rule_2_applied': 'Rule No. 2 Applied',
+                    'date_range': 'Date Range'
+                }), 
+                reset_index=True, 
+                round_decimals=2
+            )
+            print(formatted_ltv.to_string())
+            
+            # Rule No. 2 summary
+            rule_2_applied = ltv_reach[ltv_reach['rule_2_applied'] == 'Yes']
+            if not rule_2_applied.empty:
+                print(f"\n📊 RULE NO. 2 SUMMARY")
+                print(f"  Campaigns with Rule No. 2 applied: {len(rule_2_applied)}")
+                print(f"  Average original reach: {rule_2_applied['original_reach'].mean():.2f}%")
+                print(f"  Average adjusted reach: {rule_2_applied['ltv_reach'].mean():.2f}%")
+                print(f"  Average adjustment: {rule_2_applied['original_reach'].mean() - rule_2_applied['ltv_reach'].mean():.2f}%")
+            else:
+                print(f"\n📊 RULE NO. 2 SUMMARY")
+                print(f"  No campaigns qualified for Rule No. 2 (all reach < 15%)")
+        else:
+            # Fallback to original summary if LTV reach data not available
+            final_ltv_summary = daily_reach.groupby(['region', 'brand']).agg({
+                'reach_final': 'last',
+                'total_cumulative_spots': 'last',
+                'total_rating': 'last',
+                'max_reach': 'last'
+            }).reset_index()
+            
+            print(f"\n🎯 FINAL LTV REACH BY REGION & BRAND")
+            print("-" * 80)
+            formatted_summary = format_dataframe_for_display(
+                final_ltv_summary.rename(columns={
+                    'region': 'Region',
+                    'brand': 'Brand', 
+                    'reach_final': 'Final LTV Reach (%)',
+                    'total_cumulative_spots': 'Total Spots',
+                    'total_rating': 'Total Rating',
+                    'max_reach': 'Max Reach (%)'
+                }), 
+                reset_index=True, 
+                round_decimals=2
+            )
+            print(formatted_summary.to_string())
     
     print("\n" + "="*80)
     print("✅ DAILY LTV REACH COMPUTATION COMPLETED")
@@ -212,10 +280,10 @@ def main():
     """Main function to run LTV reach computation"""
     
     # Example parameters - modify as needed
-    products = "vim drop"  # Change to your product name
-    start_date = "2025-01-01"  # Change to your start date
-    end_date = "2025-01-31"    # Change to your end date
-    regions = ['Delhi', 'TN/Pondicherry']  # Change to your regions or None for all
+    products = "amazon.in"  # Change to your product name
+    start_date = "2025-09-01"  # Change to your start date
+    end_date = "2025-09-31"    # Change to your end date
+    regions = ['Delhi', 'Chennai']  # Change to your regions or None for all
     
     print("🎯 LTV REACH COMPUTATION FROM SCRATCH")
     print("="*50)
