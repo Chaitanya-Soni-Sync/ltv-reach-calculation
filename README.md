@@ -33,6 +33,22 @@ For campaigns with **max_reach < 40%**, the system uses Enhanced Progressive Gro
 
 ## Usage
 
+### Streamlit Dashboard (Recommended)
+
+```bash
+# Run the interactive dashboard
+streamlit run app.py
+```
+
+The dashboard provides:
+- Interactive filters for product, date range, and regions
+- Real-time LTV reach calculation
+- Visual table display with search and pagination
+- CSV export functionality
+- Summary metrics and statistics
+
+### Command Line
+
 ```bash
 # Run the LTV reach calculation pipeline
 python modules/main.py
